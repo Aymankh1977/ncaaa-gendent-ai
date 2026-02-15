@@ -1,0 +1,6 @@
+streamlit
+anthropic
+pypdf
+reportlab
+python-dotenv
+pandas
