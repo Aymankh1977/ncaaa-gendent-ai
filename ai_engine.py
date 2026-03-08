@@ -4,10 +4,13 @@ from anthropic import Anthropic
 import json
 import re
 
-# --- CONFIGURATION ---
-# If this fails, try "claude-3-opus-20240229" (Smarter but slower)
-# or "claude-3-haiku-20240307" (Faster/Cheaper)
-MODEL_ID = "claude-3-sonnet-20240229"
+# --- MODEL CONFIGURATION ---
+# Try these IDs if one fails (404 error):
+# 1. "claude-3-5-sonnet-latest"  (Best balance)
+# 2. "claude-3-opus-latest"      (Most powerful, most expensive)
+# 3. "claude-3-haiku-20240307"   (Fastest, cheapest, widely available)
+
+MODEL_ID = "claude-3-5-sonnet-latest" 
 
 def get_client():
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -88,9 +91,7 @@ def analyze_evidence_for_standard(client, standard_name, standard_info, document
         return json.loads(cleaned_json)
 
     except json.JSONDecodeError:
-        # --- FAIL-SAFE MODE ---
-        # If JSON fails, strictly return a structure that contains the raw text
-        # so the user can at least read the analysis.
+        # Fail-safe: Return raw text wrapped in JSON structure
         return {
             "relevance": "Analysis Completed (Format Error)",
             "compliance_rating": "Check Text",
