@@ -4,3 +4,4 @@ pypdf
 reportlab
 python-dotenv
 pandas
+python-docx
