@@ -3,8 +3,7 @@ from anthropic import Anthropic
 import json
 import re
 
-# --- CONFIGURATION ---
-# We are switching to Haiku because it is the most compatible model
+# --- CRITICAL FIX: USING HAIKU TO PREVENT 404 ERRORS ---
 MODEL_ID = "claude-3-haiku-20240307"
 
 def get_client():
@@ -25,14 +24,11 @@ def clean_json_response(response_text):
 
     # Find the FIRST opening brace '{'
     start_index = response_text.find('{')
-    
     # Find the LAST closing brace '}'
     end_index = response_text.rfind('}')
 
     if start_index != -1 and end_index != -1:
-        # Extract the content
-        json_str = response_text[start_index : end_index + 1]
-        return json_str
+        return response_text[start_index : end_index + 1]
     
     return response_text
 
@@ -80,13 +76,11 @@ def analyze_evidence_for_standard(client, standard_name, standard_info, document
         )
         
         raw_text = response.content[0].text
-        
-        # Attempt to clean and parse
         cleaned_json = clean_json_response(raw_text)
         return json.loads(cleaned_json)
 
     except json.JSONDecodeError:
-        # Fail-safe: Return raw text wrapped in JSON structure
+        # FAIL-SAFE: Return raw text if JSON parsing fails
         return {
             "relevance": "Analysis Completed (Format Error)",
             "compliance_rating": "Check Text",

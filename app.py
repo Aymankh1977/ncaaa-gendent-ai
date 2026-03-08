@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import json
@@ -30,7 +29,7 @@ with st.sidebar:
         st.session_state.full_text = ""
 
     if uploaded_files and st.button("Analyze Documents"):
-        with st.spinner("Processing documents against ETEC Standards..."):
+        with st.spinner("Processing documents..."):
             all_text = ""
             for file in uploaded_files:
                 chunks = load_and_chunk_pdf(file)
@@ -43,125 +42,85 @@ with st.sidebar:
 st.title("NCAAA Accreditation Intelligence Platform")
 st.markdown("**Target:** General Dentistry Program | **Framework:** ETEC 2022/2024")
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Accreditation Status", 
-    "🧐 Standard Reviewer", 
-    "🔗 NQF Alignment", 
-    "📝 SSR Writer"
-])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Status", "🧐 Reviewer", "🔗 NQF", "📝 SSR Writer"])
 
 # --- TAB 1 ---
 with tab1:
     st.subheader("Readiness Dashboard")
     if not st.session_state.processed_data:
         st.info("Upload documents to see readiness status.")
-        st.write("### Required Evidence Checklist")
-        cols = st.columns(3)
-        for i, doc in enumerate(REQUIRED_DOCUMENTS):
-            cols[i % 3].checkbox(doc, disabled=True)
     else:
         uploaded_names = list(st.session_state.processed_data.keys())
         found_docs = [doc for doc in REQUIRED_DOCUMENTS if any(doc.lower().split()[0] in f.lower() for f in uploaded_names)]
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("Documents Uploaded", len(uploaded_names))
-        col2.metric("Required Docs Found", f"{len(found_docs)}/{len(REQUIRED_DOCUMENTS)}")
-        col3.metric("Estimated Readiness", f"{int((len(found_docs)/len(REQUIRED_DOCUMENTS))*100)}%")
+        col1.metric("Uploaded", len(uploaded_names))
+        col2.metric("Matches", f"{len(found_docs)}/{len(REQUIRED_DOCUMENTS)}")
+        col3.metric("Readiness", f"{int((len(found_docs)/len(REQUIRED_DOCUMENTS))*100)}%")
         st.progress(len(found_docs)/len(REQUIRED_DOCUMENTS))
 
 # --- TAB 2: AUDIT ---
 with tab2:
     st.subheader("AI Compliance Review")
-    
-    selected_standard = st.selectbox("Select Standard to Audit", list(NCAAA_STANDARDS.keys()))
+    selected_standard = st.selectbox("Select Standard", list(NCAAA_STANDARDS.keys()))
     
     if "audit_result" not in st.session_state:
         st.session_state.audit_result = None
 
     if st.button("Run Compliance Audit"):
         if not st.session_state.full_text:
-            st.error("Please upload documents first.")
+            st.error("Upload documents first.")
         else:
             client = get_client()
             if client:
                 with st.spinner(f"Auditing Standard: {selected_standard}..."):
                     analysis = analyze_evidence_for_standard(
-                        client, 
-                        selected_standard, 
-                        NCAAA_STANDARDS[selected_standard], 
-                        st.session_state.full_text
+                        client, selected_standard, NCAAA_STANDARDS[selected_standard], st.session_state.full_text
                     )
                     st.session_state.audit_result = analysis
     
-    # Display Logic
     if st.session_state.audit_result:
         analysis = st.session_state.audit_result
-        
-        # Check for error first
         if "error" in analysis:
             st.error(f"AI Error: {analysis['error']}")
-            if "raw_response" in analysis:
-                with st.expander("Debug: View Raw AI Response"):
-                    st.code(analysis['raw_response'])
         else:
-            # Display Success Results
-            r_col1, r_col2 = st.columns([1, 3])
-            with r_col1:
-                st.metric("Compliance Rating", analysis.get("compliance_rating", "N/A"))
-            with r_col2:
-                st.info(f"**Reviewer Comment:** {analysis.get('reviewer_comment')}")
+            c1, c2 = st.columns([1, 3])
+            c1.metric("Rating", analysis.get("compliance_rating", "N/A"))
+            c2.info(analysis.get("reviewer_comment", "No comment generated."))
             
-            c1, c2 = st.columns(2)
-            with c1:
-                st.success("✅ Strengths")
-                for s in analysis.get("strengths", []):
-                    st.write(f"- {s}")
-            with c2:
-                st.error("⚠️ Areas for Improvement")
-                for gap in analysis.get("areas_for_improvement", []):
-                    st.write(f"- {gap}")
+            s1, s2 = st.columns(2)
+            with s1: 
+                st.success("Strengths")
+                for s in analysis.get("strengths", []): st.write(f"- {s}")
+            with s2: 
+                st.error("Improvements")
+                for gap in analysis.get("areas_for_improvement", []): st.write(f"- {gap}")
             
-            # SAFE DOWNLOAD BUTTON
-            st.markdown("---")
-            # Only try to dump JSON if we have a valid dictionary
-            try:
-                json_string = json.dumps(analysis, indent=4)
-                st.download_button(
-                    label="📥 Download Audit Report (JSON)",
-                    data=json_string,
-                    file_name=f"audit_{selected_standard.replace(' ', '_')}.json",
-                    mime="application/json"
-                )
-            except Exception as e:
-                st.warning("Could not generate download file.")
+            st.download_button("📥 Download Report", json.dumps(analysis, indent=4), "audit.json", "application/json")
 
 # --- TAB 3: NQF ---
 with tab3:
-    st.subheader("NQF & Learning Outcomes")
-    plo_input = st.text_area("Paste PLOs here if not in documents:")
-    if st.button("Check NQF Alignment"):
-        text_to_check = plo_input if plo_input else st.session_state.full_text
-        if not text_to_check:
-            st.warning("No text to analyze.")
+    st.subheader("NQF Alignment")
+    plo_input = st.text_area("Paste PLOs here:")
+    if st.button("Check NQF"):
+        txt = plo_input if plo_input else st.session_state.full_text
+        if not txt: st.warning("No text.")
         else:
             client = get_client()
-            with st.spinner("Analyzing..."):
-                result = check_nqf_alignment(client, text_to_check, NQF_DOMAINS)
-                st.markdown(result)
-                st.download_button("📥 Download NQF Report", result, "nqf_check.md")
+            with st.spinner("Checking..."):
+                res = check_nqf_alignment(client, txt, NQF_DOMAINS)
+                st.markdown(res)
+                st.download_button("📥 Download", res, "nqf.md")
 
 # --- TAB 4: SSR ---
 with tab4:
     st.subheader("SSR Assistant")
-    user_query = st.chat_input("Ask about the SSR...")
-    if user_query:
-        if not st.session_state.full_text:
-            st.error("Upload documents first.")
-        else:
-            client = get_client()
-            with st.chat_message("user"): st.write(user_query)
-            with st.chat_message("assistant"):
-                with st.spinner("Writing..."):
-                    response = chat_with_ssr_expert(client, st.session_state.full_text, user_query)
-                    st.markdown(response)
-                    st.download_button("📥 Download Text", response, "ssr_draft.txt")
+    q = st.chat_input("Ask about SSR...")
+    if q and st.session_state.full_text:
+        client = get_client()
+        with st.chat_message("user"): st.write(q)
+        with st.chat_message("assistant"):
+            with st.spinner("Writing..."):
+                res = chat_with_ssr_expert(client, st.session_state.full_text, q)
+                st.markdown(res)
+                st.download_button("📥 Download", res, "ssr.txt")

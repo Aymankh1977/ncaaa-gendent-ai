@@ -2,16 +2,16 @@ import pypdf
 
 def load_and_chunk_pdf(uploaded_file):
     """
-    Reads a PDF file object and returns a list of text chunks.
+    Extracts text from a PDF file object.
     """
+    text_chunks = []
     try:
-        reader = pypdf.PdfReader(uploaded_file)
-        chunks = []
-        for page in reader.pages:
+        pdf_reader = pypdf.PdfReader(uploaded_file)
+        for page in pdf_reader.pages:
             text = page.extract_text()
             if text:
-                # Basic chunking by page, can be improved later
-                chunks.append(text)
-        return chunks
+                text_chunks.append(text)
     except Exception as e:
         return [f"Error reading PDF: {str(e)}"]
+    
+    return text_chunks
