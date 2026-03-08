@@ -1,11 +1,8 @@
+# ai_engine.py
 import os
 from anthropic import Anthropic
 import json
-import re
-
-# --- CONFIGURATION ---
-# We are switching to Haiku because it is the most compatible model
-MODEL_ID = "claude-3-haiku-20240307"
+import re  # Added for regex cleaning
 
 def get_client():
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -15,26 +12,17 @@ def get_client():
 
 def clean_json_response(response_text):
     """
-    Robust cleaner: Finds the largest block of text between '{' and '}'.
+    Helper to extract JSON from Markdown code blocks if present.
     """
-    # Remove markdown code blocks if present
+    # Look for content between ```json and ``` or just ``` and ```
     pattern = r"```(?:json)?\s*(.*?)\s*```"
     match = re.search(pattern, response_text, re.DOTALL)
+    
     if match:
-        response_text = match.group(1)
-
-    # Find the FIRST opening brace '{'
-    start_index = response_text.find('{')
+        return match.group(1)
     
-    # Find the LAST closing brace '}'
-    end_index = response_text.rfind('}')
-
-    if start_index != -1 and end_index != -1:
-        # Extract the content
-        json_str = response_text[start_index : end_index + 1]
-        return json_str
-    
-    return response_text
+    # If no code blocks, assume the whole text is JSON but strip whitespace
+    return response_text.strip()
 
 def analyze_evidence_for_standard(client, standard_name, standard_info, document_text):
     """
@@ -42,10 +30,8 @@ def analyze_evidence_for_standard(client, standard_name, standard_info, document
     """
     system_prompt = (
         "You are an expert NCAAA/ETEC External Reviewer for a General Dentistry Program. "
-        "Your task is to evaluate the provided evidence against the standard. "
-        "CRITICAL INSTRUCTION: You must output valid JSON only. "
-        "Do not use trailing commas. Do not use single quotes for keys. "
-        "Do not write any introductory text."
+        "Your job is to evaluate evidence against the 2022 Program Accreditation Standards. "
+        "You must output ONLY valid JSON. Do not add conversational text."
     )
 
     user_prompt = f"""
@@ -58,46 +44,41 @@ def analyze_evidence_for_standard(client, standard_name, standard_info, document
 
     TASK:
     1. Identify if this evidence supports the standard.
-    2. Rate the compliance level (1 to 5).
-    3. Identify Gaps and Recommendations.
+    2. Rate the compliance level (1 to 5) based on NCAAA Self-Evaluation Scales.
+    3. Identify Gaps.
+    4. Provide Recommendations.
 
-    REQUIRED JSON FORMAT:
+    OUTPUT FORMAT (Strict JSON, no markdown):
     {{
         "relevance": "High/Medium/Low",
         "compliance_rating": "X/5",
         "strengths": ["point 1", "point 2"],
         "areas_for_improvement": ["gap 1", "gap 2"],
-        "reviewer_comment": "Write your main narrative here."
+        "reviewer_comment": "Professional narrative..."
     }}
     """
 
     try:
         response = client.messages.create(
-            model=MODEL_ID,
-            max_tokens=2500,
+            model="claude-3-5-sonnet-20240620",
+            max_tokens=2000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]
         )
         
         raw_text = response.content[0].text
-        
-        # Attempt to clean and parse
         cleaned_json = clean_json_response(raw_text)
+        
         return json.loads(cleaned_json)
-
     except json.JSONDecodeError:
-        # Fail-safe: Return raw text wrapped in JSON structure
-        return {
-            "relevance": "Analysis Completed (Format Error)",
-            "compliance_rating": "Check Text",
-            "strengths": ["See Reviewer Comment"],
-            "areas_for_improvement": ["See Reviewer Comment"],
-            "reviewer_comment": f"**NOTE: AI formatting failed, but here is the raw analysis:**\n\n{raw_text}"
-        }
+        return {"error": "Failed to parse JSON. Raw AI response: " + raw_text[:100]}
     except Exception as e:
-        return {"error": f"Connection/API Error: {str(e)}"}
+        return {"error": str(e)}
 
 def check_nqf_alignment(client, plo_text, nqf_domains):
+    """
+    Checks if Program Learning Outcomes (PLOs) align with NQF Level 6 (Bachelor).
+    """
     prompt = f"""
     Review these Dentistry Program Learning Outcomes (PLOs):
     {plo_text}
@@ -107,12 +88,14 @@ def check_nqf_alignment(client, plo_text, nqf_domains):
 
     Task:
     1. Are the Knowledge, Skills, and Values properly categorized?
-    2. Are the verbs used appropriate for a Bachelor's degree?
+    2. Are the verbs used appropriate for a Bachelor's degree (e.g., Analyze, Evaluate vs. Define)?
     3. Is there alignment with professional dentistry standards?
+
+    Provide a structured analysis.
     """
     try:
         response = client.messages.create(
-            model=MODEL_ID,
+            model="claude-3-5-sonnet-20240620",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -121,20 +104,25 @@ def check_nqf_alignment(client, plo_text, nqf_domains):
         return f"Error: {str(e)}"
 
 def chat_with_ssr_expert(client, context, user_query):
+    """
+    Context-aware chat for writing the SSR.
+    """
     system_prompt = (
         "You are a specialized Accreditation Consultant for a Dental School. "
-        "Help write the Self-Study Report (SSR). Use the provided evidence."
+        "You help write the Self-Study Report (SSR). "
+        "Use the provided evidence to write professional, evidence-based narratives. "
+        "If evidence is missing, flag it immediately."
     )
     
     messages = [
-        {"role": "user", "content": f"Context Evidence:\n{context[:40000]}"},
-        {"role": "assistant", "content": "I have reviewed the evidence."},
+        {"role": "user", "content": f"Context Evidence:\n{context[:50000]}"},
+        {"role": "assistant", "content": "I have reviewed the evidence. Ready to assist with the SSR."},
         {"role": "user", "content": user_query}
     ]
 
     try:
         response = client.messages.create(
-            model=MODEL_ID,
+            model="claude-3-5-sonnet-20240620",
             max_tokens=3000,
             system=system_prompt,
             messages=messages
