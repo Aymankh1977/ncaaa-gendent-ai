@@ -12,24 +12,25 @@ def get_client():
 
 def clean_json_response(response_text):
     """
-    Robust cleaner: Finds the first '{' and the last '}' to extract valid JSON,
-    ignoring any conversational text before or after.
+    Robust cleaner: Finds the largest block of text between '{' and '}'.
     """
-    # 1. Attempt to find JSON inside Markdown code blocks first (e.g., ```json ... ```)
+    # Remove markdown code blocks if present
     pattern = r"```(?:json)?\s*(.*?)\s*```"
     match = re.search(pattern, response_text, re.DOTALL)
     if match:
         response_text = match.group(1)
 
-    # 2. "Brace Finder" - Find the first { and the last }
+    # Find the FIRST opening brace '{'
     start_index = response_text.find('{')
+    
+    # Find the LAST closing brace '}'
     end_index = response_text.rfind('}')
 
     if start_index != -1 and end_index != -1:
-        # Extract only the JSON part
-        return response_text[start_index : end_index + 1]
+        # Extract the content
+        json_str = response_text[start_index : end_index + 1]
+        return json_str
     
-    # If no braces found, return original text (which will likely fail parsing)
     return response_text
 
 def analyze_evidence_for_standard(client, standard_name, standard_info, document_text):
@@ -38,9 +39,10 @@ def analyze_evidence_for_standard(client, standard_name, standard_info, document
     """
     system_prompt = (
         "You are an expert NCAAA/ETEC External Reviewer for a General Dentistry Program. "
-        "Your job is to evaluate evidence against the 2022 Program Accreditation Standards. "
-        "IMPORTANT: Output ONLY valid JSON. Do not include markdown formatting (```), "
-        "do not include introductions, and do not include concluding remarks."
+        "Your task is to evaluate the provided evidence against the standard. "
+        "CRITICAL INSTRUCTION: You must output valid JSON only. "
+        "Do not use trailing commas. Do not use single quotes for keys. "
+        "Do not write any introductory text."
     )
 
     user_prompt = f"""
@@ -53,49 +55,48 @@ def analyze_evidence_for_standard(client, standard_name, standard_info, document
 
     TASK:
     1. Identify if this evidence supports the standard.
-    2. Rate the compliance level (1 to 5) based on NCAAA Self-Evaluation Scales.
-    3. Identify Gaps.
-    4. Provide Recommendations.
+    2. Rate the compliance level (1 to 5).
+    3. Identify Gaps and Recommendations.
 
-    OUTPUT FORMAT:
+    REQUIRED JSON FORMAT:
     {{
         "relevance": "High/Medium/Low",
         "compliance_rating": "X/5",
         "strengths": ["point 1", "point 2"],
         "areas_for_improvement": ["gap 1", "gap 2"],
-        "reviewer_comment": "Professional narrative..."
+        "reviewer_comment": "Write your main narrative here."
     }}
     """
 
     try:
         response = client.messages.create(
             model="claude-3-5-sonnet-20240620",
-            max_tokens=2000,
+            max_tokens=2500,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]
         )
         
         raw_text = response.content[0].text
         
-        # --- CLEANING STEP ---
+        # Attempt to clean and parse
         cleaned_json = clean_json_response(raw_text)
-        
         return json.loads(cleaned_json)
-        
-    except json.JSONDecodeError as e:
-        # Return the specific error and the text that caused it for debugging
+
+    except json.JSONDecodeError:
+        # --- FAIL-SAFE MODE ---
+        # If JSON fails, strictly return a structure that contains the raw text
+        # so the user can at least read the analysis.
         return {
-            "error": "JSON Parsing Failed", 
-            "details": str(e),
-            "raw_response": raw_text[:200] + "..." # Show first 200 chars to debug
+            "relevance": "Analysis Completed (Format Error)",
+            "compliance_rating": "Check Text",
+            "strengths": ["See Reviewer Comment"],
+            "areas_for_improvement": ["See Reviewer Comment"],
+            "reviewer_comment": f"**NOTE: AI formatting failed, but here is the raw analysis:**\n\n{raw_text}"
         }
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": f"Connection/API Error: {str(e)}"}
 
 def check_nqf_alignment(client, plo_text, nqf_domains):
-    """
-    Checks if Program Learning Outcomes (PLOs) align with NQF Level 6 (Bachelor).
-    """
     prompt = f"""
     Review these Dentistry Program Learning Outcomes (PLOs):
     {plo_text}
@@ -105,10 +106,8 @@ def check_nqf_alignment(client, plo_text, nqf_domains):
 
     Task:
     1. Are the Knowledge, Skills, and Values properly categorized?
-    2. Are the verbs used appropriate for a Bachelor's degree (e.g., Analyze, Evaluate vs. Define)?
+    2. Are the verbs used appropriate for a Bachelor's degree?
     3. Is there alignment with professional dentistry standards?
-
-    Provide a structured analysis.
     """
     try:
         response = client.messages.create(
@@ -121,19 +120,14 @@ def check_nqf_alignment(client, plo_text, nqf_domains):
         return f"Error: {str(e)}"
 
 def chat_with_ssr_expert(client, context, user_query):
-    """
-    Context-aware chat for writing the SSR.
-    """
     system_prompt = (
         "You are a specialized Accreditation Consultant for a Dental School. "
-        "You help write the Self-Study Report (SSR). "
-        "Use the provided evidence to write professional, evidence-based narratives. "
-        "If evidence is missing, flag it immediately."
+        "Help write the Self-Study Report (SSR). Use the provided evidence."
     )
     
     messages = [
-        {"role": "user", "content": f"Context Evidence:\n{context[:50000]}"},
-        {"role": "assistant", "content": "I have reviewed the evidence. Ready to assist with the SSR."},
+        {"role": "user", "content": f"Context Evidence:\n{context[:40000]}"},
+        {"role": "assistant", "content": "I have reviewed the evidence."},
         {"role": "user", "content": user_query}
     ]
 
