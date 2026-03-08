@@ -1,121 +1,132 @@
+# ai_engine.py
 import os
-import json
-import re
 from anthropic import Anthropic
-from dotenv import load_dotenv
-from config import SYSTEM_PROMPT_EXTRACTOR, SYSTEM_PROMPT_GENERATOR
-
-load_dotenv()
+import json
+import re  # Added for regex cleaning
 
 def get_client():
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise ValueError("API Key not found. Please check your .env file.")
+        return None
     return Anthropic(api_key=api_key)
 
-def repair_json(broken_json_str):
-    """ Emergency repair if AI cuts off JSON. """
-    try:
-        if "}" not in broken_json_str[-5:]:
-            if broken_json_str.strip().endswith(","):
-                broken_json_str = broken_json_str.strip()[:-1]
-            if broken_json_str.count('"') % 2 != 0:
-                broken_json_str += '"'
-            broken_json_str += "}"
-            if broken_json_str.count('{') > broken_json_str.count('}'):
-                broken_json_str += "}"
-        return json.loads(broken_json_str)
-    except:
-        return {
-            "definition": "Data truncated.",
-            "indicators": ["Data truncated."],
-            "pitfalls": ["Data truncated."],
-            "best_practice": "Raw Output: " + broken_json_str[:500]
-        }
-
-def analyze_chunk(client, chunk: str, req_title: str, req_def: str) -> str:
-    prompt = f"""
-    TARGET STANDARD: {req_title}
-    DEFINITION: "{req_def}"
-    
-    DOCUMENT EXCERPT:
-    "{chunk}"
-    
-    TASK:
-    Identify if this text provides evidence of compliance or non-compliance with the 2025 General Dentistry Standards.
-    Look for specific keywords: "KLO", "SKU", "Clinical Training", "Assessment Methods".
-    If found, extract the evidence verbatim.
-    If unrelated, return "NO_DATA".
+def clean_json_response(response_text):
     """
-    try:
-        response = client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=1024,
-            temperature=0,
-            system=SYSTEM_PROMPT_EXTRACTOR,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.content[0].text.strip()
-    except Exception as e:
-        return f"Error: {e}"
+    Helper to extract JSON from Markdown code blocks if present.
+    """
+    # Look for content between ```json and ``` or just ``` and ```
+    pattern = r"```(?:json)?\s*(.*?)\s*```"
+    match = re.search(pattern, response_text, re.DOTALL)
+    
+    if match:
+        return match.group(1)
+    
+    # If no code blocks, assume the whole text is JSON but strip whitespace
+    return response_text.strip()
 
-def generate_compliance_report(client, all_evidence: list, req_title: str, req_def: str) -> dict:
-    combined_evidence = "\n".join(all_evidence)
-    if len(combined_evidence) > 100000:
-        combined_evidence = combined_evidence[:100000] + "\n[...TRUNCATED...]"
-    
-    prompt = f"""
-    TARGET STANDARD: {req_title}
-    DEFINITION: "{req_def}"
-    
-    EVIDENCE EXTRACTED:
-    {combined_evidence}
-    
+def analyze_evidence_for_standard(client, standard_name, standard_info, document_text):
+    """
+    Analyzes specific evidence against a specific NCAAA standard.
+    """
+    system_prompt = (
+        "You are an expert NCAAA/ETEC External Reviewer for a General Dentistry Program. "
+        "Your job is to evaluate evidence against the 2022 Program Accreditation Standards. "
+        "You must output ONLY valid JSON. Do not add conversational text."
+    )
+
+    user_prompt = f"""
+    STANDARDS TO EVALUATE: {standard_name}
+    DESCRIPTION: {standard_info['description']}
+    CRITERIA: {', '.join(standard_info['criteria'])}
+
+    EVIDENCE CONTENT (Excerpt):
+    {document_text[:25000]} 
+
     TASK:
-    Generate a Compliance Report against ETEC 2025 General Dentistry Standards.
-    
-    OUTPUT JSON FORMAT:
+    1. Identify if this evidence supports the standard.
+    2. Rate the compliance level (1 to 5) based on NCAAA Self-Evaluation Scales.
+    3. Identify Gaps.
+    4. Provide Recommendations.
+
+    OUTPUT FORMAT (Strict JSON, no markdown):
     {{
-        "definition": "Summary of the standard...",
-        "indicators": ["Evidence of alignment found...", "Specific KLOs mentioned..."],
-        "pitfalls": ["Gaps in curriculum...", "Missing SKUs...", "Outdated assessment methods..."],
-        "best_practice": "Strongest point of compliance found in the documents..."
+        "relevance": "High/Medium/Low",
+        "compliance_rating": "X/5",
+        "strengths": ["point 1", "point 2"],
+        "areas_for_improvement": ["gap 1", "gap 2"],
+        "reviewer_comment": "Professional narrative..."
     }}
-    
-    IMPORTANT: Output ONLY valid JSON.
+    """
+
+    try:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20240620",
+            max_tokens=2000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}]
+        )
+        
+        raw_text = response.content[0].text
+        cleaned_json = clean_json_response(raw_text)
+        
+        return json.loads(cleaned_json)
+    except json.JSONDecodeError:
+        return {"error": "Failed to parse JSON. Raw AI response: " + raw_text[:100]}
+    except Exception as e:
+        return {"error": str(e)}
+
+def check_nqf_alignment(client, plo_text, nqf_domains):
+    """
+    Checks if Program Learning Outcomes (PLOs) align with NQF Level 6 (Bachelor).
+    """
+    prompt = f"""
+    Review these Dentistry Program Learning Outcomes (PLOs):
+    {plo_text}
+
+    Compare them against Saudi NQF Level 6 Domains:
+    {json.dumps(nqf_domains)}
+
+    Task:
+    1. Are the Knowledge, Skills, and Values properly categorized?
+    2. Are the verbs used appropriate for a Bachelor's degree (e.g., Analyze, Evaluate vs. Define)?
+    3. Is there alignment with professional dentistry standards?
+
+    Provide a structured analysis.
     """
     try:
         response = client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=4096,
-            temperature=0.2,
-            system=SYSTEM_PROMPT_GENERATOR,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        content = response.content[0].text.strip()
-        if content.startswith("```json"):
-            content = content.replace("```json", "").replace("```", "")
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return repair_json(content)
-    except Exception as e:
-        return {"definition": f"Error: {e}", "indicators": [], "pitfalls": [], "best_practice": ""}
-
-def query_documents(client, full_context: str, user_question: str) -> str:
-    if len(full_context) > 500000:
-        full_context = full_context[:500000] + "...(truncated)"
-
-    system_prompt = "You are an AI Research Assistant for Dental Education. Answer based strictly on the uploaded text."
-    prompt = f"CONTEXT:\n{full_context}\n\nQUESTION: {user_question}"
-    
-    try:
-        response = client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=1024,
-            temperature=0.4,
-            system=system_prompt,
+            model="claude-3-5-sonnet-20240620",
+            max_tokens=1500,
             messages=[{"role": "user", "content": prompt}]
         )
         return response.content[0].text
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {str(e)}"
+
+def chat_with_ssr_expert(client, context, user_query):
+    """
+    Context-aware chat for writing the SSR.
+    """
+    system_prompt = (
+        "You are a specialized Accreditation Consultant for a Dental School. "
+        "You help write the Self-Study Report (SSR). "
+        "Use the provided evidence to write professional, evidence-based narratives. "
+        "If evidence is missing, flag it immediately."
+    )
+    
+    messages = [
+        {"role": "user", "content": f"Context Evidence:\n{context[:50000]}"},
+        {"role": "assistant", "content": "I have reviewed the evidence. Ready to assist with the SSR."},
+        {"role": "user", "content": user_query}
+    ]
+
+    try:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20240620",
+            max_tokens=3000,
+            system=system_prompt,
+            messages=messages
+        )
+        return response.content[0].text
+    except Exception as e:
+        return f"Error: {str(e)}"

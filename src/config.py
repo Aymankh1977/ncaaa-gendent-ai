@@ -1,57 +1,76 @@
-# src/config.py
+# config.py
 
-# ETEC Academic Standards for General Dentistry Programs (Version 2.0 - 2025)
-ETEC_STANDARDS_2025 = {
-    "KLO": {
-        "title": "Key Learning Outcomes (KLOs)",
-        "definition": "The program must demonstrate that graduates achieve the 9 KLOs mapped to the NQF. Includes: KLO1 (Biomedical/Clinical Sciences), KLO2 (Critical Thinking), KLO3 (Research), KLO4 (Diagnosis/Treatment Planning), KLO5 (Clinical Skills/Safety), KLO6 (Communication), KLO7 (Digital Tools), KLO8 (Ethics/Law), KLO9 (Professionalism/Leadership). (Source: ETEC 2025, p.4)"
+# Based on the "Standards for Program Accreditation 2022" and Self-Evaluation Scales
+NCAAA_STANDARDS = {
+    "1. Mission and Goals": {
+        "description": "The program mission must be consistent with the institution's mission and guide all operations.",
+        "criteria": [
+            "1.1 Program Management",
+            "1.2 Program Quality Assurance"
+        ],
+        "keywords": ["mission", "goals", "strategic plan", "KPIs", "advisory board"]
     },
-    "EKU": {
-        "title": "Essential Knowledge Units (EKUs)",
-        "definition": "Curriculum must include at least 14 credit hours of: English Language (10 hrs), Chemistry (2 hrs), and Biology (2 hrs). These are prerequisites for the dental program. (Source: ETEC 2025, p.5)"
+    "2. Teaching and Learning": {
+        "description": "Graduate attributes and learning outcomes must be precisely defined and consistent with NQF.",
+        "criteria": [
+            "2.1 Student Learning Outcomes (NQF Alignment)",
+            "2.2 Curriculum Design",
+            "2.3 Quality of Teaching and Assessment"
+        ],
+        "keywords": ["learning outcomes", "NQF", "curriculum", "assessment", "field training", "internship"]
     },
-    "GKU_1": {
-        "title": "GKU 1: Knowledge (Basic Sciences)",
-        "definition": "Must cover ~25% of the core curriculum. Includes: General Anatomy & Physiology (7%), Dental Anatomy (2%), Dental Biomaterials (3%), Pharmacology (2%), General Pathology (3%), Oral Pathology (3%), Oral Histology (2%), Oral Biology (3%)."
+    "3. Students": {
+        "description": "Clear admission criteria, fair treatment, and effective guidance/counseling services.",
+        "criteria": [
+            "3.1 Student Admissions",
+            "3.2 Guidance and Counseling",
+            "3.3 Appeals and Complaints"
+        ],
+        "keywords": ["admission", "student handbook", "counseling", "grievance", "alumni"]
     },
-    "GKU_2": {
-        "title": "GKU 2: Ethics and Professionalism",
-        "definition": "Must cover ~2% of curriculum. Focus on: Dental Health Regulations & Safety Practices (1%) and Patient Advocacy/Privacy/Confidentiality (1%)."
+    "4. Faculty": {
+        "description": "Sufficient qualified teaching staff with necessary competence and professional development.",
+        "criteria": [
+            "4.1 Faculty Qualifications",
+            "4.2 Professional Development",
+            "4.3 Faculty Evaluation"
+        ],
+        "keywords": ["CV", "faculty load", "professional development", "research output", "promotion"]
     },
-    "GKU_3": {
-        "title": "GKU 3: Communication",
-        "definition": "Must cover ~2% of curriculum. Focus on: Patient & Family Communication (1%) and Interprofessional Collaboration/Community Health Promotion (1%)."
+    "5. Learning Resources": {
+        "description": "Adequate facilities, equipment, and digital resources to meet program needs.",
+        "criteria": [
+            "5.1 Learning Resources",
+            "5.2 Facilities and Equipment",
+            "5.3 Safety and Risk Management"
+        ],
+        "keywords": ["library", "laboratories", "clinics", "safety manual", "IT support"]
     },
-    "GKU_4": {
-        "title": "GKU 4: Health Promotion",
-        "definition": "Must cover ~2% of curriculum. Focus on: Prevention Programs for Oral Diseases (1%) and General Health Promotion Strategies (1%)."
-    },
-    "GKU_5": {
-        "title": "GKU 5: Practice Management & Informatics",
-        "definition": "Must cover ~2% of curriculum. Focus on: Emerging IT/Documentation (1%) and Resource Utilization/Business Management in Dentistry (1%)."
-    },
-    "GKU_6": {
-        "title": "GKU 6: Patient Care (Clinical)",
-        "definition": "The core of the program (~67% weight). Includes: Examination/Diagnosis (10%), Radiology (4%), Restorative/Endo (19%), Surgery/Emergencies (11%), Prosthodontics (14%), Periodontics (9%). (Source: ETEC 2025, p.6)"
+    "6. Research and Projects": {
+        "description": "Encouraging faculty and students to produce research and innovation.",
+        "criteria": [
+            "6.1 Research Activities",
+            "6.2 Student Research"
+        ],
+        "keywords": ["publications", "citations", "research plan", "funding", "ethics"]
     }
 }
 
-SYSTEM_PROMPT_EXTRACTOR = """
-You are an expert ETEC/NCAAA Accreditation Reviewer for Dentistry.
-Your task is to analyze documents (Course Specs, Annual Reports, Self-Studies) against the 'Academic Standards for General Dentistry Programs 2025 (Version 2.0)'.
+# Based on National Qualifications Framework (NQF) - Level 6 (Bachelor)
+NQF_DOMAINS = {
+    "Knowledge and Understanding": "Deep understanding of facts, concepts, and theories in Dentistry.",
+    "Skills": "Application of knowledge, critical thinking, and practical clinical skills.",
+    "Values, Autonomy, and Responsibility": "Professional ethics, patient safety, and lifelong learning."
+}
 
-Your goal is to extract EVIDENCE of:
-1. Alignment with the 9 Key Learning Outcomes (KLOs).
-2. Coverage of the Specific Knowledge Units (SKUs).
-3. Implementation of specific clinical skills (e.g., Implantology, Digital Dentistry).
-4. Any Gaps or weaknesses compared to the 2025 Standards.
-
-If the text provided does not contain relevant evidence, return 'NO_DATA'.
-"""
-
-SYSTEM_PROMPT_GENERATOR = """
-You are a Senior Consultant for ETEC Accreditation.
-Your goal is to synthesize evidence into a 'Compliance Report'.
-You must be objective, referencing the 2025 Standards (Version 2.0).
-You output ONLY valid JSON.
-"""
+REQUIRED_DOCUMENTS = [
+    "Program Specification",
+    "Course Specifications",
+    "Field Experience Specifications",
+    "Annual Program Report",
+    "Key Performance Indicators (KPIs) Report",
+    "Self-Study Report (SSR)",
+    "Student Handbook",
+    "Faculty Handbook",
+    "Advisory Board Minutes"
+]
