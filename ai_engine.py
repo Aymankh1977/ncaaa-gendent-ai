@@ -1,16 +1,11 @@
-# ai_engine.py
 import os
 from anthropic import Anthropic
 import json
 import re
 
-# --- MODEL CONFIGURATION ---
-# Try these IDs if one fails (404 error):
-# 1. "claude-3-5-sonnet-latest"  (Best balance)
-# 2. "claude-3-opus-latest"      (Most powerful, most expensive)
-# 3. "claude-3-haiku-20240307"   (Fastest, cheapest, widely available)
-
-MODEL_ID = "claude-3-5-sonnet-latest" 
+# --- CONFIGURATION ---
+# We are switching to Haiku because it is the most compatible model
+MODEL_ID = "claude-3-haiku-20240307"
 
 def get_client():
     api_key = os.getenv("ANTHROPIC_API_KEY")
