@@ -6,10 +6,8 @@ from config import NCAAA_STANDARDS, NQF_DOMAINS, REQUIRED_DOCUMENTS
 from ai_engine import get_client, analyze_evidence_for_standard, check_nqf_alignment, chat_with_ssr_expert
 from pdf_processor import load_and_chunk_pdf 
 
-# Page Config
 st.set_page_config(page_title="NCAAA Dentistry Accreditation AI", layout="wide", page_icon="🦷")
 
-# CSS for NCAAA Styling
 st.markdown("""
 <style>
     .reportview-container { background: #f0f2f6 }
@@ -19,7 +17,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar
 with st.sidebar:
     st.image("https://etec.gov.sa/assets/images/logo.svg", width=200) 
     st.title("🦷 Dentistry Accreditation")
@@ -43,11 +40,9 @@ with st.sidebar:
             st.session_state.full_text = all_text
             st.success("Analysis Complete!")
 
-# Main Area
 st.title("NCAAA Accreditation Intelligence Platform")
 st.markdown("**Target:** General Dentistry Program | **Framework:** ETEC 2022/2024")
 
-# Tabs
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Accreditation Status", 
     "🧐 Standard Reviewer", 
@@ -55,10 +50,9 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📝 SSR Writer"
 ])
 
-# --- TAB 1: DASHBOARD ---
+# --- TAB 1 ---
 with tab1:
     st.subheader("Readiness Dashboard")
-    
     if not st.session_state.processed_data:
         st.info("Upload documents to see readiness status.")
         st.write("### Required Evidence Checklist")
@@ -73,19 +67,14 @@ with tab1:
         col1.metric("Documents Uploaded", len(uploaded_names))
         col2.metric("Required Docs Found", f"{len(found_docs)}/{len(REQUIRED_DOCUMENTS)}")
         col3.metric("Estimated Readiness", f"{int((len(found_docs)/len(REQUIRED_DOCUMENTS))*100)}%")
-        
         st.progress(len(found_docs)/len(REQUIRED_DOCUMENTS))
-        
-        st.write("### Document Inventory")
-        st.dataframe(pd.DataFrame({"Uploaded Files": uploaded_names, "Size (Est)": "PDF"}))
 
-# --- TAB 2: STANDARD REVIEWER ---
+# --- TAB 2: AUDIT ---
 with tab2:
     st.subheader("AI Compliance Review")
     
     selected_standard = st.selectbox("Select Standard to Audit", list(NCAAA_STANDARDS.keys()))
     
-    # Store result in session state so it persists
     if "audit_result" not in st.session_state:
         st.session_state.audit_result = None
 
@@ -104,22 +93,24 @@ with tab2:
                     )
                     st.session_state.audit_result = analysis
     
-    # Display results if they exist
+    # Display Logic
     if st.session_state.audit_result:
         analysis = st.session_state.audit_result
+        
+        # Check for error first
         if "error" in analysis:
-            st.error("AI Error: " + analysis['error'])
+            st.error(f"AI Error: {analysis['error']}")
+            if "raw_response" in analysis:
+                with st.expander("Debug: View Raw AI Response"):
+                    st.code(analysis['raw_response'])
         else:
-            # Display Results
+            # Display Success Results
             r_col1, r_col2 = st.columns([1, 3])
             with r_col1:
                 st.metric("Compliance Rating", analysis.get("compliance_rating", "N/A"))
-                st.caption("Based on Self-Evaluation Scales")
-            
             with r_col2:
-                st.markdown(f"**Reviewer Comment:** {analysis.get('reviewer_comment')}")
+                st.info(f"**Reviewer Comment:** {analysis.get('reviewer_comment')}")
             
-            st.markdown("---")
             c1, c2 = st.columns(2)
             with c1:
                 st.success("✅ Strengths")
@@ -130,68 +121,47 @@ with tab2:
                 for gap in analysis.get("areas_for_improvement", []):
                     st.write(f"- {gap}")
             
-            # --- ADDED DOWNLOAD BUTTON HERE ---
+            # SAFE DOWNLOAD BUTTON
             st.markdown("---")
-            json_string = json.dumps(analysis, indent=4)
-            st.download_button(
-                label="📥 Download Audit Report (JSON)",
-                data=json_string,
-                file_name=f"audit_{selected_standard.replace(' ', '_')}.json",
-                mime="application/json"
-            )
+            # Only try to dump JSON if we have a valid dictionary
+            try:
+                json_string = json.dumps(analysis, indent=4)
+                st.download_button(
+                    label="📥 Download Audit Report (JSON)",
+                    data=json_string,
+                    file_name=f"audit_{selected_standard.replace(' ', '_')}.json",
+                    mime="application/json"
+                )
+            except Exception as e:
+                st.warning("Could not generate download file.")
 
-# --- TAB 3: NQF ALIGNMENT ---
+# --- TAB 3: NQF ---
 with tab3:
     st.subheader("NQF & Learning Outcomes")
-    st.markdown("Verifies if Program Learning Outcomes (PLOs) meet **NQF Level 6 (Dentistry)** requirements.")
-    
-    plo_input = st.text_area("Paste Program Learning Outcomes (PLOs) here if not in documents:")
-    
+    plo_input = st.text_area("Paste PLOs here if not in documents:")
     if st.button("Check NQF Alignment"):
         text_to_check = plo_input if plo_input else st.session_state.full_text
         if not text_to_check:
             st.warning("No text to analyze.")
         else:
             client = get_client()
-            with st.spinner("Analyzing against NQF Matrix..."):
+            with st.spinner("Analyzing..."):
                 result = check_nqf_alignment(client, text_to_check, NQF_DOMAINS)
                 st.markdown(result)
-                
-                # Download Result
-                st.download_button(
-                    label="📥 Download NQF Analysis",
-                    data=result,
-                    file_name="nqf_alignment.md",
-                    mime="text/markdown"
-                )
+                st.download_button("📥 Download NQF Report", result, "nqf_check.md")
 
-# --- TAB 4: SSR WRITER ---
+# --- TAB 4: SSR ---
 with tab4:
-    st.subheader("Self-Study Report (SSR) Assistant")
-    st.markdown("Ask the AI to draft sections of the SSR based on the uploaded evidence.")
-    
-    st.markdown("Try asking:")
-    st.code("Draft the narrative for Standard 2.2 (Clinical Training) referencing the Field Experience Manual.")
-    
-    user_query = st.chat_input("Enter your request for the SSR...")
-    
+    st.subheader("SSR Assistant")
+    user_query = st.chat_input("Ask about the SSR...")
     if user_query:
         if not st.session_state.full_text:
             st.error("Upload documents first.")
         else:
             client = get_client()
-            with st.chat_message("user"):
-                st.write(user_query)
-            
+            with st.chat_message("user"): st.write(user_query)
             with st.chat_message("assistant"):
-                with st.spinner("Drafting response..."):
+                with st.spinner("Writing..."):
                     response = chat_with_ssr_expert(client, st.session_state.full_text, user_query)
                     st.markdown(response)
-                    
-                    # --- ADDED DOWNLOAD BUTTON HERE ---
-                    st.download_button(
-                        label="📥 Download Drafted Section",
-                        data=response,
-                        file_name="ssr_draft_section.txt",
-                        mime="text/plain"
-                    )
+                    st.download_button("📥 Download Text", response, "ssr_draft.txt")
