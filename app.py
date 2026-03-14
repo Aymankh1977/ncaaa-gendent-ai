@@ -3,7 +3,8 @@ import json
 from datetime import datetime
 from config import (RUBRIC_CRITERIA, NCAAA_STANDARDS_GROUPS, NQF_DOMAINS,
                     REQUIRED_DOCUMENTS, ALL_CRITERIA_KEYS,
-                    PROGRAM_KPIS, DENTISTRY_SPECIALIZED_STANDARDS)
+                    PROGRAM_KPIS, KPI_REPORT_REQUIREMENTS,
+                    DENTISTRY_SPECIALIZED_STANDARDS)
 from ai_engine import get_client, analyze_evidence_for_standard, check_nqf_alignment, chat_with_ssr_expert
 from document_processor import load_document
 from report_generator import build_audit_pdf, build_nqf_pdf, build_ssr_pdf
