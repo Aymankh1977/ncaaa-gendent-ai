@@ -2,9 +2,7 @@ import streamlit as st
 import json
 from datetime import datetime
 from config import (RUBRIC_CRITERIA, NCAAA_STANDARDS_GROUPS, NQF_DOMAINS,
-                    REQUIRED_DOCUMENTS, ALL_CRITERIA_KEYS,
-                    PROGRAM_KPIS, KPI_REPORT_REQUIREMENTS,
-                    DENTISTRY_SPECIALIZED_STANDARDS)
+                    REQUIRED_DOCUMENTS, ALL_CRITERIA_KEYS)
 from ai_engine import get_client, analyze_evidence_for_standard, check_nqf_alignment, chat_with_ssr_expert
 from document_processor import load_document
 from report_generator import build_audit_pdf, build_nqf_pdf, build_ssr_pdf
@@ -137,12 +135,25 @@ with tab1:
         for fname, chunks in st.session_state.processed_chunks.items():
             st.markdown(f"- `{fname}`: {len(chunks)} chunks")
 
-        # KPI reference
+        # KPI reference — inline so no extra config import needed
         with st.expander("📊 NCAAA Required KPIs (DP-101, 2024)"):
             st.markdown("The following 11 KPIs are the **minimum** required by NCAAA for all bachelor programs:")
-            for code, kpi in PROGRAM_KPIS.items():
-                st.markdown(f"**{code}** — {kpi['name']}")
-                st.caption(kpi['measurement'])
+            _kpis = [
+                ("KPI-P-01", "Students' Evaluation of Quality of Learning Experience",   "Annual survey — final year students"),
+                ("KPI-P-02", "Students' Evaluation of the Quality of Courses",            "Annual survey — all students"),
+                ("KPI-P-03", "Teaching Staff Evaluation of the Program",                  "Annual survey — teaching staff"),
+                ("KPI-P-04", "Employers' Evaluation of Graduates",                        "Biennial survey — employers"),
+                ("KPI-P-05", "Pass Rate in Professional / Licensing Examinations",        "Annual calculation"),
+                ("KPI-P-06", "Employment Rate of Graduates",                              "Annual tracking — 1 year post-graduation"),
+                ("KPI-P-07", "Postgraduate Enrolment Rate",                               "Annual tracking — 2 years post-graduation"),
+                ("KPI-P-08", "Graduate Evaluation of Program",                            "Annual survey — 1 year post-graduation"),
+                ("KPI-P-09", "Credit Hours Completion Rate",                              "Annual calculation per cohort"),
+                ("KPI-P-10", "Graduation Rate",                                           "Annual calculation per cohort"),
+                ("KPI-P-11", "Dropout Rate",                                              "Annual calculation per cohort"),
+            ]
+            for code, name, measurement in _kpis:
+                st.markdown(f"**{code}** — {name}")
+                st.caption(measurement)
 
 
 # ── TAB 2 — STANDARD REVIEWER ──────────────────────────────────────────────────
