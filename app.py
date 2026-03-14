@@ -31,8 +31,48 @@ st.markdown("""
         border-radius: 4px;
         font-size: 0.9em;
     }
+    .doc-select-notice {
+        background: #e3f2fd;
+        border-left: 4px solid #1565c0;
+        padding: 10px 14px;
+        border-radius: 4px;
+        font-size: 0.9em;
+        margin-bottom: 12px;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# ── Session state initialisation ───────────────────────────────────────────────
+if "processed_chunks" not in st.session_state:
+    st.session_state.processed_chunks = {}
+if "audit_result" not in st.session_state:
+    st.session_state.audit_result = None
+if "nqf_result" not in st.session_state:
+    st.session_state.nqf_result = None
+if "ssr_chat_history" not in st.session_state:
+    st.session_state.ssr_chat_history = []
+
+
+def chunks_for(selected_filenames):
+    result = []
+    for fname in selected_filenames:
+        result.extend(st.session_state.processed_chunks.get(fname, []))
+    return result
+
+
+def doc_selector(key, label="📄 Select documents to analyse"):
+    all_docs = list(st.session_state.processed_chunks.keys())
+    if not all_docs:
+        return []
+    return st.multiselect(
+        label,
+        options=all_docs,
+        default=all_docs,
+        key=key,
+        help="Tick only your school's evidence documents. Deselect official reference PDFs "
+             "(e.g. NCAAA handbook, NQF framework) to keep them out of the evidence pool."
+    )
+
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -44,21 +84,16 @@ with st.sidebar:
         "Upload School Documents", type=["pdf"], accept_multiple_files=True
     )
 
-    if "processed_chunks" not in st.session_state:
-        st.session_state.processed_chunks = {}
-        st.session_state.all_chunks      = []
-        st.session_state.full_text       = ""
-
     if uploaded_files and st.button("📖 Process Documents"):
         with st.spinner("Reading and indexing documents…"):
-            all_chunks, processed = [], {}
+            processed = {}
             for file in uploaded_files:
                 chunks = load_and_chunk_pdf(file)
                 processed[file.name] = chunks
-                all_chunks.extend(chunks)
             st.session_state.processed_chunks = processed
-            st.session_state.all_chunks       = all_chunks
-            st.session_state.full_text        = " ".join(all_chunks)
+            st.session_state.audit_result     = None
+            st.session_state.nqf_result       = None
+            st.session_state.ssr_chat_history  = []
             total_pages = sum(len(v) for v in processed.values())
             st.success(f"✅ Indexed {len(processed)} doc(s) — {total_pages} pages total.")
 
@@ -67,12 +102,13 @@ with st.sidebar:
         for fname, chunks in st.session_state.processed_chunks.items():
             st.markdown(f"- `{fname}` ({len(chunks)} pages)")
 
+
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.title("Accreditation Intelligence Platform")
 
 st.markdown(
     '<div class="grounding-notice">🔒 <strong>Grounded Mode Active</strong> — '
-    'All AI responses are restricted to content found in your uploaded documents. '
+    'All AI responses are restricted to content found in your <strong>selected</strong> documents. '
     'Anything not evidenced will be explicitly flagged as '
     '<em>NOT EVIDENCED IN DOCUMENTS</em>.</div>',
     unsafe_allow_html=True
@@ -81,6 +117,7 @@ st.markdown(
 tab1, tab2, tab3, tab4 = st.tabs(
     ["📊 Dashboard", "🧐 Standard Reviewer", "🔗 NQF Alignment", "📝 SSR Writer"]
 )
+
 
 # ── TAB 1 — DASHBOARD ──────────────────────────────────────────────────────────
 with tab1:
@@ -95,9 +132,9 @@ with tab1:
         missing_docs = [d for d in REQUIRED_DOCUMENTS if d not in found_docs]
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("📄 Documents Uploaded",    len(uploaded_names))
-        col2.metric("✅ Required Docs Matched",  f"{len(found_docs)}/{len(REQUIRED_DOCUMENTS)}")
-        col3.metric("📈 Readiness Score",        f"{int(len(found_docs)/len(REQUIRED_DOCUMENTS)*100)}%")
+        col1.metric("📄 Documents Uploaded",   len(uploaded_names))
+        col2.metric("✅ Required Docs Matched", f"{len(found_docs)}/{len(REQUIRED_DOCUMENTS)}")
+        col3.metric("📈 Readiness Score",       f"{int(len(found_docs)/len(REQUIRED_DOCUMENTS)*100)}%")
         st.progress(len(found_docs) / len(REQUIRED_DOCUMENTS))
 
         if missing_docs:
@@ -110,42 +147,61 @@ with tab1:
         for fname, chunks in st.session_state.processed_chunks.items():
             st.markdown(f"- `{fname}`: {len(chunks)} pages")
 
+
 # ── TAB 2 — STANDARD REVIEWER ──────────────────────────────────────────────────
 with tab2:
     st.subheader("AI Compliance Reviewer")
     st.markdown(
-        "The reviewer scans **every page** of your documents for evidence relevant to the "
-        "selected standard before generating its assessment."
+        "Select which documents to include, choose a standard, then run the audit. "
+        "Only the selected documents will be searched for evidence."
     )
 
-    selected_standard = st.selectbox("Select Standard", list(NCAAA_STANDARDS.keys()))
+    if not st.session_state.processed_chunks:
+        st.info("📁 Upload and process documents in the sidebar first.")
+    else:
+        st.markdown(
+            '<div class="doc-select-notice">💡 <strong>Tip:</strong> Deselect any official '
+            'reference or framework PDFs (e.g. NCAAA handbook, NQF document) so only your '
+            "school's evidence is analysed.</div>",
+            unsafe_allow_html=True
+        )
+        audit_selected_docs = doc_selector("audit_doc_select")
 
-    if "audit_result" not in st.session_state:
-        st.session_state.audit_result = None
-
-    if st.button("▶️ Run Compliance Audit"):
-        if not st.session_state.all_chunks:
-            st.error("⚠️ No documents processed. Upload and process documents first.")
+        if not audit_selected_docs:
+            st.warning("⚠️ No documents selected. Tick at least one document above.")
         else:
-            client = get_client("audit")
-            if not client:
-                st.error("No API key found. Please set ANTHROPIC_API_KEY in your environment.")
-            else:
-                with st.spinner(f"Extracting evidence for '{selected_standard}'…"):
-                    analysis = analyze_evidence_for_standard(
-                        client,
-                        selected_standard,
-                        NCAAA_STANDARDS[selected_standard],
-                        st.session_state.all_chunks
-                    )
-                    st.session_state.audit_result = analysis
+            with st.expander(f"📋 {len(audit_selected_docs)} document(s) active for this audit"):
+                for fname in audit_selected_docs:
+                    n = len(st.session_state.processed_chunks.get(fname, []))
+                    st.markdown(f"- `{fname}` ({n} pages)")
+
+            st.markdown("---")
+            selected_standard = st.selectbox("Select NCAAA Standard", list(NCAAA_STANDARDS.keys()))
+
+            if st.button("▶️ Run Compliance Audit"):
+                client = get_client("audit")
+                if not client:
+                    st.error("No API key found. Please set ANTHROPIC_API_KEY in your environment.")
+                else:
+                    selected_chunks = chunks_for(audit_selected_docs)
+                    with st.spinner(
+                        f"Extracting evidence for '{selected_standard}' "
+                        f"from {len(audit_selected_docs)} document(s)…"
+                    ):
+                        analysis = analyze_evidence_for_standard(
+                            client,
+                            selected_standard,
+                            NCAAA_STANDARDS[selected_standard],
+                            selected_chunks
+                        )
+                        st.session_state.audit_result = analysis
 
     if st.session_state.audit_result:
         analysis = st.session_state.audit_result
-
         if "error" in analysis:
             st.error(f"❌ API Error: {analysis['error']}")
         else:
+            st.markdown("---")
             c1, c2 = st.columns([1, 3])
             c1.metric("Compliance Rating", analysis.get("compliance_rating", "N/A"))
             c1.metric("Relevance",         analysis.get("relevance", "N/A"))
@@ -159,7 +215,7 @@ with tab2:
                     for s in strengths:
                         st.write(f"- {s}")
                 else:
-                    st.write("No strengths evidenced in uploaded documents.")
+                    st.write("No strengths evidenced in selected documents.")
             with s2:
                 st.error("⚠️ Gaps & Improvements")
                 for gap in analysis.get("areas_for_improvement", []):
@@ -171,7 +227,6 @@ with tab2:
                     for cite in citations:
                         st.markdown(f"> {cite}")
 
-            # ── PDF download ──
             pdf_bytes = build_audit_pdf(selected_standard, analysis)
             st.download_button(
                 label="📥 Download Audit Report (PDF)",
@@ -180,42 +235,64 @@ with tab2:
                 mime="application/pdf"
             )
 
+
 # ── TAB 3 — NQF ALIGNMENT ──────────────────────────────────────────────────────
 with tab3:
     st.subheader("NQF Level 6 Alignment Checker")
     st.markdown(
-        "Paste your PLOs directly, or leave blank to use PLO content extracted "
-        "from your uploaded documents."
+        "Select specific documents to extract PLOs from, **or** paste PLOs manually below. "
+        "Manual paste overrides document selection."
     )
+
+    if not st.session_state.processed_chunks:
+        st.info("📁 Upload and process documents in the sidebar, or paste PLOs directly below.")
+    else:
+        st.markdown(
+            '<div class="doc-select-notice">💡 <strong>Tip:</strong> Select only the Program '
+            'Specification or Course Specification — not the official NQF reference document '
+            'itself.</div>',
+            unsafe_allow_html=True
+        )
+        nqf_selected_docs = doc_selector("nqf_doc_select")
+        if nqf_selected_docs:
+            with st.expander(f"📋 {len(nqf_selected_docs)} document(s) selected"):
+                for fname in nqf_selected_docs:
+                    n = len(st.session_state.processed_chunks.get(fname, []))
+                    st.markdown(f"- `{fname}` ({n} pages)")
 
     plo_input = st.text_area(
-        "Program Learning Outcomes (PLOs)",
-        height=200,
-        placeholder="Paste your PLOs here, one per line…\nLeave blank to use uploaded documents."
+        "Program Learning Outcomes (PLOs) — optional manual paste",
+        height=180,
+        placeholder="Paste your PLOs here to override document selection…"
     )
 
-    if "nqf_result" not in st.session_state:
-        st.session_state.nqf_result = None
-
     if st.button("🔍 Check NQF Alignment"):
-        plo_source = plo_input.strip() if plo_input.strip() else st.session_state.full_text
-
-        if not plo_source:
-            st.warning("⚠️ No PLO text and no documents uploaded. Please provide input.")
+        if plo_input.strip():
+            plo_source   = plo_input.strip()
+            source_label = "manually pasted PLOs"
+        elif st.session_state.processed_chunks:
+            selected = st.session_state.get("nqf_doc_select",
+                                            list(st.session_state.processed_chunks.keys()))
+            if not selected:
+                st.warning("⚠️ No documents selected. Tick at least one document or paste PLOs.")
+                st.stop()
+            plo_source   = " ".join(chunks_for(selected))
+            source_label = f"{len(selected)} selected document(s)"
         else:
-            client = get_client("nqf")
-            if not client:
-                st.error("No API key found. Please set ANTHROPIC_API_KEY in your environment.")
-            else:
-                source_label = "manually pasted PLOs" if plo_input.strip() else "uploaded documents"
-                with st.spinner(f"Analysing alignment from {source_label}…"):
-                    result = check_nqf_alignment(client, plo_source, NQF_DOMAINS)
-                    st.session_state.nqf_result = result
+            st.warning("⚠️ No PLO text and no documents uploaded. Please provide input.")
+            st.stop()
+
+        client = get_client("nqf")
+        if not client:
+            st.error("No API key found. Please set ANTHROPIC_API_KEY in your environment.")
+        else:
+            with st.spinner(f"Analysing alignment from {source_label}…"):
+                result = check_nqf_alignment(client, plo_source, NQF_DOMAINS)
+                st.session_state.nqf_result = result
 
     if st.session_state.nqf_result:
+        st.markdown("---")
         st.markdown(st.session_state.nqf_result)
-
-        # ── PDF download ──
         pdf_bytes = build_nqf_pdf(st.session_state.nqf_result)
         st.download_button(
             label="📥 Download NQF Report (PDF)",
@@ -224,23 +301,37 @@ with tab3:
             mime="application/pdf"
         )
 
+
 # ── TAB 4 — SSR WRITER ─────────────────────────────────────────────────────────
 with tab4:
     st.subheader("SSR Writing Assistant")
     st.markdown(
-        "Ask the assistant to draft a section of your Self-Study Report. "
-        "It will only write from evidence found in your uploaded documents."
+        "Select the documents that contain your evidence, then ask the assistant to draft "
+        "a section. Only the selected documents will be used as source material."
     )
 
-    if not st.session_state.all_chunks:
+    if not st.session_state.processed_chunks:
         st.markdown(
             '<div class="warning-notice">⚠️ No documents loaded. '
             "Upload and process documents in the sidebar before using the SSR Writer.</div>",
             unsafe_allow_html=True
         )
+    else:
+        st.markdown(
+            '<div class="doc-select-notice">💡 <strong>Tip:</strong> Select only your school\'s '
+            'evidence documents — exclude any NCAAA or NQF reference PDFs.</div>',
+            unsafe_allow_html=True
+        )
+        ssr_selected_docs = doc_selector("ssr_doc_select")
+        if ssr_selected_docs:
+            with st.expander(f"📋 {len(ssr_selected_docs)} document(s) selected for SSR drafting"):
+                for fname in ssr_selected_docs:
+                    n = len(st.session_state.processed_chunks.get(fname, []))
+                    st.markdown(f"- `{fname}` ({n} pages)")
+        else:
+            st.warning("⚠️ No documents selected. Tick at least one document above.")
 
-    if "ssr_chat_history" not in st.session_state:
-        st.session_state.ssr_chat_history = []
+    st.markdown("---")
 
     for msg in st.session_state.ssr_chat_history:
         with st.chat_message(msg["role"]):
@@ -255,13 +346,21 @@ with tab4:
         with st.chat_message("user"):
             st.markdown(user_query)
 
-        if not st.session_state.all_chunks:
+        ssr_docs = st.session_state.get("ssr_doc_select", [])
+
+        if not st.session_state.processed_chunks:
             reply = (
                 "⚠️ No documents have been processed yet. "
                 "Please upload and process your documents using the sidebar first."
             )
             with st.chat_message("assistant"):
                 st.markdown(reply)
+
+        elif not ssr_docs:
+            reply = "⚠️ No documents selected. Please tick at least one document in the selector above."
+            with st.chat_message("assistant"):
+                st.markdown(reply)
+
         else:
             client = get_client("ssr")
             if not client:
@@ -269,16 +368,14 @@ with tab4:
                 with st.chat_message("assistant"):
                     st.markdown(reply)
             else:
+                selected_chunks = chunks_for(ssr_docs)
                 with st.chat_message("assistant"):
-                    with st.spinner("Searching documents and drafting response…"):
-                        reply = chat_with_ssr_expert(
-                            client,
-                            st.session_state.all_chunks,
-                            user_query
-                        )
+                    with st.spinner(
+                        f"Searching {len(ssr_docs)} document(s) and drafting response…"
+                    ):
+                        reply = chat_with_ssr_expert(client, selected_chunks, user_query)
                         st.markdown(reply)
 
-                        # ── PDF download ──
                         pdf_bytes = build_ssr_pdf(user_query, reply)
                         st.download_button(
                             label="📥 Download SSR Section (PDF)",
