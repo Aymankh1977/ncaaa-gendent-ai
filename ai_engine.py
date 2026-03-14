@@ -25,49 +25,30 @@ def get_client(feature: str = "master"):
 
 
 # ==============================================================================
-# JSON CLEANING UTILITY
+# JSON CLEANING
 # ==============================================================================
 
-def clean_json_response(response_text: str) -> str:
-    pattern = r"```(?:json)?\s*(.*?)\s*```"
-    match = re.search(pattern, response_text, re.DOTALL)
+def clean_json_response(text: str) -> str:
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     if match:
-        response_text = match.group(1)
-    start = response_text.find('{')
-    end   = response_text.rfind('}')
+        text = match.group(1)
+    start = text.find('{')
+    end   = text.rfind('}')
     if start != -1 and end != -1:
-        return response_text[start:end + 1]
-    return response_text
+        return text[start:end + 1]
+    return text
 
 
 # ==============================================================================
-# EVIDENCE EXTRACTION  — fixed version
-#
-# Key fixes vs previous version:
-#   1. max_tokens raised 1000 → 2000  (rubric tables are large)
-#   2. Keywords are now OPTIONAL hints — the prompt no longer filters
-#      aggressively; it asks the AI to extract ALL substantive content
-#      that could be relevant to the topic, not just keyword matches.
-#   3. For SSR queries, we pass ALL chunks directly rather than pre-filtering,
-#      so nothing is silently dropped before the AI sees it.
+# EVIDENCE EXTRACTION  — unchanged from last fix
 # ==============================================================================
 
 def _extract_relevant_passages(client, topic: str, keywords: list, chunks: list) -> str:
-    """
-    Scans every chunk and extracts content relevant to `topic`.
-    `keywords` are hints only — the AI decides relevance, not a keyword filter.
-    """
     relevant_passages = []
-
     for i, chunk in enumerate(chunks):
         if not chunk.strip():
             continue
-
-        # Build a hint string only if we have meaningful keywords
-        hint = ""
-        if keywords:
-            hint = f"Keyword hints (use as guidance only): {', '.join(keywords)}\n"
-
+        hint = f"Keyword hints: {', '.join(keywords)}\n" if keywords else ""
         prompt = f"""You are a document analyst extracting evidence for an accreditation review.
 
 TOPIC: {topic}
@@ -78,17 +59,16 @@ DOCUMENT CHUNK {i+1}:
 \"\"\"
 
 INSTRUCTIONS:
-- Extract ALL text from this chunk that is relevant to the topic above.
-- Include full sentences, table rows, numbered items, and criteria — do not truncate.
-- Do NOT paraphrase or summarise. Copy the exact text.
-- Do NOT invent or add anything not present in the chunk.
-- If nothing in this chunk is relevant, respond with exactly: NO_RELEVANT_CONTENT
+- Extract ALL text from this chunk that is relevant to the topic.
+- Include full sentences, table rows, numbered items — do not truncate.
+- Do NOT paraphrase. Copy exact text.
+- Do NOT invent anything.
+- If nothing is relevant, respond with exactly: NO_RELEVANT_CONTENT
 - Start your response with [CHUNK-{i+1}] on its own line.
 """
         try:
             response = client.messages.create(
-                model=MODEL_ID,
-                max_tokens=2000,   # FIX: was 1000, too low for rubric tables
+                model=MODEL_ID, max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}]
             )
             result = response.content[0].text.strip()
@@ -97,94 +77,133 @@ INSTRUCTIONS:
         except Exception:
             continue
 
-    if not relevant_passages:
-        return "NO_RELEVANT_CONTENT_FOUND_IN_ANY_DOCUMENT"
-
-    return "\n\n".join(relevant_passages)
+    return "\n\n".join(relevant_passages) if relevant_passages else "NO_RELEVANT_CONTENT_FOUND_IN_ANY_DOCUMENT"
 
 
 # ==============================================================================
-# TAB 2 — COMPLIANCE AUDIT
+# TAB 2 — COMPLIANCE AUDIT  (full rubric-based, per-component scoring)
 # ==============================================================================
 
-def analyze_evidence_for_standard(client, standard_name: str, standard_info: dict, chunks: list) -> dict:
+def _format_rubric_for_prompt(criterion_info: dict) -> str:
+    """Formats the full 4-level rubric for a criterion into a readable prompt block."""
+    lines = [f"Criterion Description: {criterion_info['description']}", ""]
+    lines.append("RUBRIC COMPONENTS AND SCORING LEVELS:")
+    lines.append("=" * 60)
+    for comp in criterion_info['components']:
+        lines.append(f"\nComponent: {comp['component']}")
+        lines.append(f"  Score 4 — Full Compliance:        {comp['full_4']}")
+        lines.append(f"  Score 3 — Substantial Compliance: {comp['sub_3']}")
+        lines.append(f"  Score 2 — Minimal Compliance:     {comp['min_2']}")
+        lines.append(f"  Score 1 — Non-Compliance:         {comp['non_1']}")
+    return "\n".join(lines)
+
+
+def analyze_evidence_for_standard(client, criterion_key: str, criterion_info: dict, chunks: list) -> dict:
+    """
+    Full rubric-based audit:
+      Phase 1 — extract all relevant evidence passages from documents.
+      Phase 2 — score EVERY component against the 4-level rubric.
+    """
     extract_client = get_client("extract")
 
+    # Build search topic from criterion description + all component names
+    component_names = [c['component'] for c in criterion_info.get('components', [])]
+    topic = f"{criterion_key} — {criterion_info.get('description', '')} — Components: {'; '.join(component_names)}"
+
     grounded_evidence = _extract_relevant_passages(
-        extract_client,
-        topic=f"NCAAA standard: {standard_name} — {standard_info.get('description', '')}",
-        keywords=standard_info.get("keywords", []),
-        chunks=chunks
+        extract_client, topic=topic, keywords=[], chunks=chunks
     )
 
     system_prompt = (
         "You are a strict NCAAA/ETEC External Reviewer for a General Dentistry Program.\n"
         "ABSOLUTE RULES:\n"
-        "  1. You may ONLY reference evidence explicitly present in the EXTRACTED PASSAGES block.\n"
-        "  2. If a criterion has no supporting passage, mark it 'NOT EVIDENCED IN DOCUMENTS'.\n"
-        "  3. Do NOT draw on general knowledge about dentistry or accreditation.\n"
-        "  4. Every strength or gap MUST include a [CHUNK-N] citation.\n"
-        "  5. Output valid JSON only — no preamble, no markdown.\n"
+        "  1. Score EVERY component listed in the rubric — never skip one.\n"
+        "  2. Base scores ONLY on evidence in the EXTRACTED PASSAGES. Never use general knowledge.\n"
+        "  3. If a component has no evidence in the passages, score it 1 (Non-Compliance) and state 'NOT EVIDENCED IN DOCUMENTS'.\n"
+        "  4. For each component, cite the exact [CHUNK-N] reference that supports your score.\n"
+        "  5. Output valid JSON only — no preamble, no markdown fences.\n"
     )
 
+    rubric_text = _format_rubric_for_prompt(criterion_info)
+    num_components = len(criterion_info.get('components', []))
+
     if grounded_evidence == "NO_RELEVANT_CONTENT_FOUND_IN_ANY_DOCUMENT":
+        components_result = [
+            {
+                "component": c['component'],
+                "score": 1,
+                "level": "Non-Compliance",
+                "finding": "NOT EVIDENCED IN DOCUMENTS — no relevant content found in uploaded files.",
+                "citation": "N/A"
+            }
+            for c in criterion_info.get('components', [])
+        ]
         return {
-            "relevance": "Low",
-            "compliance_rating": "1/5",
+            "criterion": criterion_key,
+            "description": criterion_info.get('description', ''),
+            "overall_score": "1/4",
+            "overall_level": "Non-Compliance",
+            "components": components_result,
+            "summary": f"No evidence found in uploaded documents for {criterion_key}. Upload the relevant evidence documents.",
             "strengths": [],
-            "areas_for_improvement": [
-                "No evidence found in the uploaded documents for this standard.",
-                "Please upload the relevant documents (see Required Documents list)."
-            ],
-            "reviewer_comment": (
-                f"After scanning all uploaded document pages, no content relevant to "
-                f"'{standard_name}' was found. Upload the appropriate evidence documents."
-            ),
+            "gaps": ["No evidence found in uploaded documents for this criterion."],
             "citations": []
         }
 
     user_prompt = f"""
-STANDARD: {standard_name}
-DESCRIPTION: {standard_info['description']}
-CRITERIA: {', '.join(standard_info['criteria'])}
+CRITERION: {criterion_key}
+{rubric_text}
 
 EXTRACTED PASSAGES FROM UPLOADED DOCUMENTS:
 \"\"\"
 {grounded_evidence}
 \"\"\"
 
-TASK: Using ONLY the passages above, evaluate compliance with the standard.
-Cite [CHUNK-N] for every point. Mark missing criteria 'NOT EVIDENCED IN DOCUMENTS'.
+TASK:
+Score EVERY component (there are {num_components} components) against the rubric above.
+Use ONLY the extracted passages as evidence.
+For each component, determine which score level (1-4) best matches the evidence.
 
-OUTPUT FORMAT (valid JSON only):
+OUTPUT — valid JSON only:
 {{
-    "relevance": "High/Medium/Low",
-    "compliance_rating": "X/5",
-    "strengths": ["[CHUNK-N] strength description"],
-    "areas_for_improvement": ["gap description or NOT EVIDENCED IN DOCUMENTS"],
-    "reviewer_comment": "Narrative with [CHUNK-N] references. No invented claims.",
-    "citations": ["CHUNK-N: exact quote"]
+    "criterion": "{criterion_key}",
+    "description": "...",
+    "overall_score": "X/4",
+    "overall_level": "Full/Substantial/Minimal/Non-Compliance",
+    "components": [
+        {{
+            "component": "exact component name from rubric",
+            "score": 1,
+            "level": "Non-Compliance",
+            "finding": "What the evidence shows, citing [CHUNK-N]. If absent: NOT EVIDENCED IN DOCUMENTS.",
+            "citation": "[CHUNK-N]: brief quote"
+        }}
+    ],
+    "summary": "Overall narrative citing chunks. No invented claims.",
+    "strengths": ["[CHUNK-N] specific strength found in documents"],
+    "gaps": ["specific gap or NOT EVIDENCED IN DOCUMENTS"],
+    "citations": ["CHUNK-N: exact short quote from evidence"]
 }}
 """
 
     try:
         response = client.messages.create(
-            model=MODEL_ID,
-            max_tokens=2500,
+            model=MODEL_ID, max_tokens=3500,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]
         )
-        raw_text = response.content[0].text
-        cleaned  = clean_json_response(raw_text)
-        return json.loads(cleaned)
+        raw  = response.content[0].text
+        return json.loads(clean_json_response(raw))
+
     except json.JSONDecodeError:
         return {
-            "relevance": "Analysis Error",
-            "compliance_rating": "N/A",
-            "strengths": [],
-            "areas_for_improvement": ["JSON parsing failed — see raw comment below."],
-            "reviewer_comment": f"RAW OUTPUT (formatting error):\n\n{raw_text}",
-            "citations": []
+            "criterion": criterion_key,
+            "description": criterion_info.get('description', ''),
+            "overall_score": "N/A",
+            "overall_level": "Parse Error",
+            "components": [],
+            "summary": f"JSON parsing failed. Raw output:\n\n{raw}",
+            "strengths": [], "gaps": ["See summary for raw output."], "citations": []
         }
     except Exception as e:
         return {"error": f"API Error: {str(e)}"}
@@ -195,37 +214,49 @@ OUTPUT FORMAT (valid JSON only):
 # ==============================================================================
 
 def check_nqf_alignment(client, plo_text: str, nqf_domains: dict) -> str:
-    system_prompt = (
-        "You are an NQF academic auditor.\n"
-        "RULES:\n"
-        "  1. Evaluate ONLY the PLOs provided in the user's message.\n"
-        "  2. Do NOT invent PLOs or assume any not explicitly stated.\n"
-        "  3. If a domain has no PLO mapped to it, state 'NO PLO FOUND FOR THIS DOMAIN'.\n"
-        "  4. Quote the exact PLO text when giving feedback.\n"
-    )
+    # Extract level guidance note and the actual domain descriptors
+    level_guidance = nqf_domains.get("_level_guidance", "")
+    domains_for_eval = {k: v for k, v in nqf_domains.items() if not k.startswith("_")}
 
+    system_prompt = (
+        "You are an expert NQF-KSA academic auditor (NQF Second Edition, 2023, ETEC).\n"
+        "RULES:\n"
+        "  1. Evaluate ONLY the PLOs explicitly provided — do NOT invent any.\n"
+        "  2. First determine the correct NQF level (6 or 7) based on program duration and credit hours\n"
+        "     if that information is available in the PLO text; otherwise evaluate against both levels.\n"
+        "  3. For each PLO, quote it exactly, map it to the correct domain, and state whether the\n"
+        "     action verb meets the complexity requirements of the determined NQF level.\n"
+        "  4. Flag verbs that are too low (e.g. List, Recall, Define → below Level 6);\n"
+        "     acceptable Level 6 verbs include: Apply, Analyse, Evaluate, Design, Solve, Conduct.\n"
+        "     Level 7 requires: Critically assess, Synthesise, Generate, Lead, Contribute.\n"
+        "  5. Identify any NQF domain that has NO mapped PLO — state this explicitly.\n"
+        "  6. Conclude with a clear recommendation: state the correct NQF level for this program\n"
+        "     and list specific revisions needed.\n"
+    )
     prompt = f"""
-PROGRAM LEARNING OUTCOMES (PLOs) TO REVIEW:
+NQF LEVEL GUIDANCE:
+{level_guidance}
+
+PROGRAM LEARNING OUTCOMES (PLOs) TO EVALUATE:
 \"\"\"
 {plo_text}
 \"\"\"
 
-NQF LEVEL 6 DOMAINS:
-{json.dumps(nqf_domains, indent=2)}
+NQF-KSA DOMAIN DESCRIPTORS (Level 6 and Level 7):
+{json.dumps(domains_for_eval, indent=2)}
 
 EVALUATION TASKS:
-1. Map each PLO to a domain. Quote the PLO exactly.
-2. Flag PLOs where the action verb does not match Bachelor's level complexity.
-3. Identify domains with NO mapped PLO — state explicitly.
-4. Provide a final recommendation paragraph.
+1. Determine the applicable NQF level (6 or 7) for this program, stating your reasoning.
+2. For each PLO: quote it exactly, map it to its domain, assess the action verb complexity.
+3. Flag any PLO where the verb does not meet the required NQF level.
+4. Identify which domains have NO mapped PLO.
+5. Provide a final recommendation with the determined NQF level and required revisions.
 
-Format your response with clear section headers.
+Use clear section headers. Be specific — quote the exact PLO text in every finding.
 """
-
     try:
         response = client.messages.create(
-            model=MODEL_ID,
-            max_tokens=2000,
+            model=MODEL_ID, max_tokens=2000,
             system=system_prompt,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -236,79 +267,49 @@ Format your response with clear section headers.
 
 # ==============================================================================
 # TAB 4 — SSR WRITER
-#
-# Key fix: stop using _extract_relevant_passages with query words as keywords.
-# Instead, pass ALL chunks directly to the writer in batches, letting the AI
-# read and use everything rather than pre-filtering on weak keyword matches.
 # ==============================================================================
 
 def chat_with_ssr_expert(client, chunks: list, user_query: str) -> str:
-    """
-    Drafts SSR content from uploaded chunks.
-
-    FIX: Previously used query words as keyword filters for extraction,
-    which caused relevant content (rubrics, course specs, standards) to be
-    silently dropped. Now passes all chunk content directly to the AI,
-    which reads and uses whatever is relevant to answer the query.
-    """
     extract_client = get_client("extract")
-
-    # Use the full query as the topic — no keyword truncation
-    # This ensures rubric rows, standard criteria, and spec sections are all captured
     grounded_evidence = _extract_relevant_passages(
-        extract_client,
-        topic=user_query,
-        keywords=[],   # FIX: no keyword pre-filter — let AI decide relevance
-        chunks=chunks
+        extract_client, topic=user_query, keywords=[], chunks=chunks
     )
 
     system_prompt = (
         "You are a professional accreditation consultant for a Dental School seeking NCAAA accreditation.\n"
-        "You help write and evaluate Self-Study Report (SSR) content.\n"
         "ABSOLUTE RULES:\n"
-        "  1. Work ONLY from the EXTRACTED PASSAGES provided. Never invent data.\n"
-        "  2. If passages contain a rubric, scoring scale, or criteria table — USE IT.\n"
-        "     Apply the rubric systematically, scoring each criterion explicitly.\n"
+        "  1. Work ONLY from the EXTRACTED PASSAGES. Never invent data.\n"
+        "  2. If passages contain a rubric or criteria table — USE IT systematically.\n"
         "  3. If passages contain a course specification — analyse it against any rubric present.\n"
         "  4. Do NOT fabricate statistics, names, dates, or policies not in the passages.\n"
-        "  5. If evidence is genuinely insufficient for part of the task, say so specifically\n"
-        "     and state exactly what additional document or section is needed.\n"
-        "  6. Use formal academic language suitable for an accreditation report.\n"
+        "  5. If evidence is insufficient, say so specifically and state what document is needed.\n"
+        "  6. Use formal academic language.\n"
         "  7. Cite source chunks in parentheses, e.g. (Source: CHUNK-3).\n"
     )
 
     if grounded_evidence == "NO_RELEVANT_CONTENT_FOUND_IN_ANY_DOCUMENT":
         return (
             "⚠️ **Insufficient Evidence**\n\n"
-            "No relevant content was found in the selected documents for your request:\n"
-            f"> *{user_query}*\n\n"
+            f"No relevant content found in the selected documents for:\n> *{user_query}*\n\n"
             "**Possible reasons:**\n"
-            "- The documents may be scanned images (not machine-readable text). "
-            "Try re-saving as a text-based PDF or DOCX.\n"
-            "- The relevant content may be in a document you haven't selected. "
-            "Check the document selector above.\n"
-            "- The file may have uploaded but not processed correctly. "
-            "Try removing and re-uploading it.\n\n"
+            "- Documents may be scanned images (not machine-readable). Re-save as text-based PDF/DOCX.\n"
+            "- Relevant content may be in a document not currently selected.\n"
+            "- File may not have processed correctly — try re-uploading.\n\n"
             "The SSR Writer will not generate content it cannot evidence from your files."
         )
 
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"EXTRACTED EVIDENCE FROM UPLOADED DOCUMENTS:\n\"\"\"\n{grounded_evidence}\n\"\"\"\n\n"
-                f"USER REQUEST:\n{user_query}\n\n"
-                "Please respond to the request using ONLY the evidence above."
-            )
-        }
-    ]
-
     try:
         response = client.messages.create(
-            model=MODEL_ID,
-            max_tokens=3000,
+            model=MODEL_ID, max_tokens=3500,
             system=system_prompt,
-            messages=messages
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"EXTRACTED EVIDENCE:\n\"\"\"\n{grounded_evidence}\n\"\"\"\n\n"
+                    f"REQUEST:\n{user_query}\n\n"
+                    "Respond using ONLY the evidence above."
+                )
+            }]
         )
         return response.content[0].text
     except Exception as e:
