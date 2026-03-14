@@ -99,12 +99,12 @@ with st.sidebar:
             st.session_state.nqf_result       = None
             st.session_state.ssr_chat_history  = []
             total_pages = sum(len(v) for v in processed.values())
-            st.success(f"✅ Indexed {len(processed)} doc(s) — {total_pages} chunks total.")
+            st.success(f"✅ Indexed {len(processed)} doc(s) — {total_pages} pages total.")
 
     if st.session_state.processed_chunks:
         st.markdown("**Loaded documents:**")
         for fname, chunks in st.session_state.processed_chunks.items():
-            st.markdown(f"- `{fname}` ({len(chunks)} chunks)")
+            st.markdown(f"- `{fname}` ({len(chunks)} pages)")
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
@@ -147,9 +147,9 @@ with tab1:
                 st.markdown(f"- {d}")
 
         st.markdown("---")
-        st.markdown("**Chunks indexed per document:**")
+        st.markdown("**Pages indexed per document:**")
         for fname, chunks in st.session_state.processed_chunks.items():
-            st.markdown(f"- `{fname}`: {len(chunks)} chunks")
+            st.markdown(f"- `{fname}`: {len(chunks)} pages")
 
 
 # ── TAB 2 — STANDARD REVIEWER ──────────────────────────────────────────────────
@@ -165,7 +165,7 @@ with tab2:
     else:
         st.markdown(
             '<div class="doc-select-notice">💡 <strong>Tip:</strong> Deselect any official '
-            'reference or framework files (e.g. NCAAA handbook, NQF document) so only your '
+            'reference or framework PDFs (e.g. NCAAA handbook, NQF document) so only your '
             "school's evidence is analysed.</div>",
             unsafe_allow_html=True
         )
@@ -177,7 +177,7 @@ with tab2:
             with st.expander(f"📋 {len(audit_selected_docs)} document(s) active for this audit"):
                 for fname in audit_selected_docs:
                     n = len(st.session_state.processed_chunks.get(fname, []))
-                    st.markdown(f"- `{fname}` ({n} chunks)")
+                    st.markdown(f"- `{fname}` ({n} pages)")
 
             st.markdown("---")
             selected_standard = st.selectbox("Select NCAAA Standard", list(NCAAA_STANDARDS.keys()))
@@ -262,7 +262,7 @@ with tab3:
             with st.expander(f"📋 {len(nqf_selected_docs)} document(s) selected"):
                 for fname in nqf_selected_docs:
                     n = len(st.session_state.processed_chunks.get(fname, []))
-                    st.markdown(f"- `{fname}` ({n} chunks)")
+                    st.markdown(f"- `{fname}` ({n} pages)")
 
     plo_input = st.text_area(
         "Program Learning Outcomes (PLOs) — optional manual paste",
@@ -323,7 +323,7 @@ with tab4:
     else:
         st.markdown(
             '<div class="doc-select-notice">💡 <strong>Tip:</strong> Select only your school\'s '
-            'evidence documents — exclude any NCAAA or NQF reference files.</div>',
+            'evidence documents — exclude any NCAAA or NQF reference PDFs.</div>',
             unsafe_allow_html=True
         )
         ssr_selected_docs = doc_selector("ssr_doc_select")
@@ -337,9 +337,23 @@ with tab4:
 
     st.markdown("---")
 
+    # Render chat history
     for msg in st.session_state.ssr_chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
+
+    # Show download button for the latest assistant reply (persists across reruns)
+    if st.session_state.get("ssr_last_reply"):
+        last_q     = st.session_state.get("ssr_last_query", "SSR Section")
+        last_reply = st.session_state["ssr_last_reply"]
+        pdf_bytes  = build_ssr_pdf(last_q, last_reply)
+        st.download_button(
+            label="📥 Download Last Response (PDF)",
+            data=pdf_bytes,
+            file_name="ssr_section.pdf",
+            mime="application/pdf",
+            key="ssr_dl_persistent"
+        )
 
     user_query = st.chat_input(
         "Ask the SSR Assistant (e.g. 'Write the narrative for Standard 4 — Students')…"
@@ -373,20 +387,16 @@ with tab4:
                     st.markdown(reply)
             else:
                 selected_chunks = chunks_for(ssr_docs)
-                with st.chat_message("assistant"):
-                    with st.spinner(
-                        f"Searching {len(ssr_docs)} document(s) and drafting response…"
-                    ):
-                        reply = chat_with_ssr_expert(client, selected_chunks, user_query)
-                        st.markdown(reply)
+                with st.spinner(
+                    f"Searching {len(ssr_docs)} document(s) and drafting response…"
+                ):
+                    reply = chat_with_ssr_expert(client, selected_chunks, user_query)
 
-                        pdf_bytes = build_ssr_pdf(user_query, reply)
-                        st.download_button(
-                            label="📥 Download SSR Section (PDF)",
-                            data=pdf_bytes,
-                            file_name="ssr_section.pdf",
-                            mime="application/pdf",
-                            key=f"ssr_dl_{len(st.session_state.ssr_chat_history)}"
-                        )
+                with st.chat_message("assistant"):
+                    st.markdown(reply)
+
+                # Store reply in session_state so download button survives rerun
+                st.session_state["ssr_last_reply"] = reply
+                st.session_state["ssr_last_query"] = user_query
 
         st.session_state.ssr_chat_history.append({"role": "assistant", "content": reply})
