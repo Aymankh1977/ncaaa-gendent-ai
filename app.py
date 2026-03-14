@@ -2,7 +2,7 @@ import streamlit as st
 import json
 from config import NCAAA_STANDARDS, NQF_DOMAINS, REQUIRED_DOCUMENTS
 from ai_engine import get_client, analyze_evidence_for_standard, check_nqf_alignment, chat_with_ssr_expert
-from pdf_processor import load_and_chunk_pdf
+from document_processor import load_document
 from report_generator import build_audit_pdf, build_nqf_pdf, build_ssr_pdf
 
 st.set_page_config(page_title="Accreditation AI Platform", layout="wide", page_icon="🦷")
@@ -81,26 +81,30 @@ with st.sidebar:
     st.header("📂 Evidence Locker")
 
     uploaded_files = st.file_uploader(
-        "Upload School Documents", type=["pdf"], accept_multiple_files=True
+        "Upload School Documents",
+        type=["pdf", "docx", "xlsx", "xls", "csv", "txt"],
+        accept_multiple_files=True,
+        help="Supported: PDF · Word (.docx) · Excel (.xlsx/.xls) · CSV · TXT"
     )
+    st.caption("📎 Accepted formats: PDF · Word · Excel · CSV · TXT")
 
     if uploaded_files and st.button("📖 Process Documents"):
         with st.spinner("Reading and indexing documents…"):
             processed = {}
             for file in uploaded_files:
-                chunks = load_and_chunk_pdf(file)
+                chunks = load_document(file)
                 processed[file.name] = chunks
             st.session_state.processed_chunks = processed
             st.session_state.audit_result     = None
             st.session_state.nqf_result       = None
             st.session_state.ssr_chat_history  = []
             total_pages = sum(len(v) for v in processed.values())
-            st.success(f"✅ Indexed {len(processed)} doc(s) — {total_pages} pages total.")
+            st.success(f"✅ Indexed {len(processed)} doc(s) — {total_pages} chunks total.")
 
     if st.session_state.processed_chunks:
         st.markdown("**Loaded documents:**")
         for fname, chunks in st.session_state.processed_chunks.items():
-            st.markdown(f"- `{fname}` ({len(chunks)} pages)")
+            st.markdown(f"- `{fname}` ({len(chunks)} chunks)")
 
 
 # ── Header ─────────────────────────────────────────────────────────────────────
@@ -143,9 +147,9 @@ with tab1:
                 st.markdown(f"- {d}")
 
         st.markdown("---")
-        st.markdown("**Pages indexed per document:**")
+        st.markdown("**Chunks indexed per document:**")
         for fname, chunks in st.session_state.processed_chunks.items():
-            st.markdown(f"- `{fname}`: {len(chunks)} pages")
+            st.markdown(f"- `{fname}`: {len(chunks)} chunks")
 
 
 # ── TAB 2 — STANDARD REVIEWER ──────────────────────────────────────────────────
@@ -161,7 +165,7 @@ with tab2:
     else:
         st.markdown(
             '<div class="doc-select-notice">💡 <strong>Tip:</strong> Deselect any official '
-            'reference or framework PDFs (e.g. NCAAA handbook, NQF document) so only your '
+            'reference or framework files (e.g. NCAAA handbook, NQF document) so only your '
             "school's evidence is analysed.</div>",
             unsafe_allow_html=True
         )
@@ -173,7 +177,7 @@ with tab2:
             with st.expander(f"📋 {len(audit_selected_docs)} document(s) active for this audit"):
                 for fname in audit_selected_docs:
                     n = len(st.session_state.processed_chunks.get(fname, []))
-                    st.markdown(f"- `{fname}` ({n} pages)")
+                    st.markdown(f"- `{fname}` ({n} chunks)")
 
             st.markdown("---")
             selected_standard = st.selectbox("Select NCAAA Standard", list(NCAAA_STANDARDS.keys()))
@@ -258,7 +262,7 @@ with tab3:
             with st.expander(f"📋 {len(nqf_selected_docs)} document(s) selected"):
                 for fname in nqf_selected_docs:
                     n = len(st.session_state.processed_chunks.get(fname, []))
-                    st.markdown(f"- `{fname}` ({n} pages)")
+                    st.markdown(f"- `{fname}` ({n} chunks)")
 
     plo_input = st.text_area(
         "Program Learning Outcomes (PLOs) — optional manual paste",
@@ -319,7 +323,7 @@ with tab4:
     else:
         st.markdown(
             '<div class="doc-select-notice">💡 <strong>Tip:</strong> Select only your school\'s '
-            'evidence documents — exclude any NCAAA or NQF reference PDFs.</div>',
+            'evidence documents — exclude any NCAAA or NQF reference files.</div>',
             unsafe_allow_html=True
         )
         ssr_selected_docs = doc_selector("ssr_doc_select")
@@ -327,7 +331,7 @@ with tab4:
             with st.expander(f"📋 {len(ssr_selected_docs)} document(s) selected for SSR drafting"):
                 for fname in ssr_selected_docs:
                     n = len(st.session_state.processed_chunks.get(fname, []))
-                    st.markdown(f"- `{fname}` ({n} pages)")
+                    st.markdown(f"- `{fname}` ({n} chunks)")
         else:
             st.warning("⚠️ No documents selected. Tick at least one document above.")
 
